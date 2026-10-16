@@ -227,7 +227,11 @@ def mode_judge(cfg_json):
     def one(q):
         cands = [mem[m]['answers'].get(q['id'], {}).get('text') for m in cfg['swarm'] if m in mem]
         cands = [c for c in cands if c and c.strip()]
-        t0 = time.time(); r = judge_call(judges, q['q'], cands, cfg.get('judge_tokens', 900)) if len(cands) > 1 else {'ok': bool(cands), 'text': cands[0] if cands else '', 'judge': 'single'}
+        t0 = time.time()
+        finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in cands]
+        if len(cands) >= 3 and len(set(finals)) == 1 and finals[0] not in ('', 'code'): r = {'ok': True, 'text': cands[0], 'judge': 'unanimous'}
+        elif len(cands) > 1: r = judge_call(judges, q['q'], cands, cfg.get('judge_tokens', 900))
+        else: r = {'ok': bool(cands), 'text': cands[0] if cands else '', 'judge': 'single'}
         lat = max([mem[m]['answers'].get(q['id'], {}).get('secs') or 0 for m in cfg['swarm'] if m in mem] or [0]) + (time.time() - t0)
         return q, r, round(lat, 1)
     with cf.ThreadPoolExecutor(3) as ex: res = list(ex.map(one, qs))
@@ -284,6 +288,15 @@ def mode_session(cfg_json):
 # ---------------- live swarm: one runner per agent slot (Grok-Heavy style: agents on separate machines, in parallel)
 JENA_PREFIX = ["ok i thought REALLY hard about this one with my helper brains 🧠", "big brain mode activated 🧠 here's what we figured out",
                "i asked my whole brain team and we checked each other 🧠"]
+def tidy(t):
+    t = (t or '').strip()
+    m = re.findall(r'ANSWER:\s*(.+)', t); fa = m[-1].strip().strip('*').strip() if m else ''
+    t = re.sub(r'\**ANSWER:.*$', '', t, flags=re.S).rstrip().rstrip('*').rstrip()
+    t = t.replace('\\(', '').replace('\\)', '').replace('\\[', '').replace('\\]', '').replace('\\times', '×').replace('\\cdot', '·').replace('\\div', '÷')
+    t = re.sub(r'\\(?:frac)\{([^}]*)\}\{([^}]*)\}', r'\1/\2', t)
+    if fa and fa.lower() != 'code' and fa not in t[-120:]: t += f'\n\nso the answer is {fa}!'
+    elif fa and fa.lower() != 'code': t += f'\n\nanswer: {fa}'
+    return t
 def mode_agent(cfg_json, slot):
     cfg = json.loads(cfg_json); me = cfg['slots'][slot]; jslot = cfg['judge_slot']; slots = list(cfg['slots'])
     idle, mx, mt = cfg.get('idle', 600), cfg.get('max', 3300), cfg.get('member_timeout', 240)
@@ -311,12 +324,15 @@ def mode_agent(cfg_json, slot):
             if len(parts) < len(slots): time.sleep(3)
         good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
         q = rq['messages'][-1]['content']; tj = time.time()
-        if len(good) > 1: fin = judge_call([{'kind': 'local', 'model': me['model']}], q, good, cfg.get('judge_tokens', 900))
+        finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in good]
+        agree = len(good) >= 3 and len(set(finals)) == 1 and finals[0] not in ('', 'code') and 'ANSWER:' in (own.get('text') or '')
+        if agree: fin = {'ok': True, 'text': own['text'], 'judge': 'unanimous'}     # every agent got the same answer: no judge needed (self-consistency)
+        elif len(good) > 1: fin = judge_call([{'kind': 'local', 'model': me['model']}], q, good, cfg.get('judge_tokens', 900))
         else: fin = {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
         text = fin.get('text') or ''
-        shown = re.sub(r'\n?ANSWER:\s*code\s*$', '', text.strip()).strip()
+        shown = tidy(text)
         voiced = (JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)] + '\n\n' + shown) if shown else None
-        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': me['model'], 'n_ok': len(good), 'n_slots': len(slots),
+        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('unanimous', 'single') else me['model'], 'n_ok': len(good), 'n_slots': len(slots),
                'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None), 'text': (v.get('text') or '')[:4000]} for k, v in parts.items()},
                'judge_secs': round(time.time() - tj, 1), 'secs_runner': round(time.time() - t0, 1), 'run': RUN}
         dels = [path] + [f'heavy/part/{rq["id"]}/{k}.json' for k in parts]
