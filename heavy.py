@@ -136,18 +136,33 @@ KIDSAFE = ("You are a strict child-safety reviewer for Jena, an AI used by a kid
 KIDSAFE_MAX = 8000      # the presented answer is reviewed IN FULL; anything longer is withheld (never partially reviewed)
 KIDSAFE_CHUNK, KIDSAFE_OVERLAP = 2500, 300
 _VERDICT_TOKEN = re.compile(r'(?:\*\*(SAFE|UNSAFE)(?:\.\*\*|\*\*\.?)|`(SAFE|UNSAFE)(?:\.`|`\.?)|"(SAFE|UNSAFE)(?:\."|"\.?)|(SAFE|UNSAFE)\.?)')
+class DuplicateKey(ValueError): pass
+def _no_dup_pairs(pairs):
+    """object_pairs_hook: json has already un-escaped the key names here, so "ver\\u0064ict" == "verdict" is caught too (round 5)."""
+    seen = set()
+    for k, _ in pairs:
+        if k in seen: raise DuplicateKey(k)
+        seen.add(k)
+    return dict(pairs)
+def _no_const(c): raise ValueError('non-JSON constant ' + c)
+def strict_json(s):
+    """json.loads that REFUSES duplicate keys at any depth (incl. unicode-escaped duplicates) and NaN/Infinity. Raises on doubt."""
+    return json.loads(s, object_pairs_hook=_no_dup_pairs, parse_constant=_no_const)
 def parse_verdict(out):
-    """STRICT (round 4). 'safe' ONLY when the whole reply (outer whitespace aside) is exactly SAFE, optionally wrapped in ONE pair of
+    """STRICT (round 5). 'safe' ONLY when the whole reply (outer whitespace aside) is exactly SAFE, optionally wrapped in ONE pair of
     ** or ` or " and with at most ONE trailing '.' (inside or outside the wrapper, not both) -- e.g. SAFE, SAFE., **SAFE**, `SAFE.`, "SAFE".
-    Or strict JSON {"verdict": "SAFE"} with no other keys. Everything else is NOT safe: 'SAFE...', 'SAFE!', 'SAFE, but', 'SAFE\nactually not',
-    'SAFEish', 'safe' (lower case), 'NOT SAFE', empty. Fail closed: 'unsafe' or 'unclear' both mean withheld."""
-    s = (out or '').strip()
+    Or strict JSON that is EXACTLY one object with exactly one key "verdict" whose value is the string "SAFE": {"verdict": "SAFE"}.
+    JSON is parsed with duplicate keys REFUSED (also unicode-escaped duplicates, at any depth): {"verdict":"UNSAFE","verdict":"SAFE"} is
+    'unclear', never 'safe'. Everything else is NOT safe: 'SAFE...', 'SAFE!', 'SAFE, but', 'SAFE\nactually not', 'SAFEish', 'safe' (lower
+    case), 'NOT SAFE', extra/nested keys, non-string values, empty. Fail closed: 'unsafe' or 'unclear' both mean withheld."""
+    s = (out if isinstance(out, str) else '').strip()
     if not s: return 'unclear'
     if s.startswith('{'):
-        try: j = json.loads(s)
+        try: j = strict_json(s)
         except Exception: return 'unclear'
-        if isinstance(j, dict) and list(j) == ['verdict'] and j['verdict'] == 'SAFE': return 'safe'
-        return 'unsafe' if isinstance(j, dict) and j.get('verdict') == 'UNSAFE' else 'unclear'
+        if type(j) is not dict or len(j) != 1 or 'verdict' not in j or type(j['verdict']) is not str: return 'unclear'
+        if j['verdict'] == 'SAFE': return 'safe'
+        return 'unsafe' if j['verdict'] == 'UNSAFE' else 'unclear'
     m = _VERDICT_TOKEN.fullmatch(s)
     if m: return 'safe' if next(g for g in m.groups() if g) == 'SAFE' else 'unsafe'
     if re.fullmatch(r'[*`"]*\s*unsafe\W*', s, re.I): return 'unsafe'
