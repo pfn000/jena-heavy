@@ -231,7 +231,8 @@ def mode_judge(cfg_json):
         cands = [c for c in cands if c and c.strip()]
         t0 = time.time()
         finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in cands]
-        if len(cands) >= 3 and len(set(finals)) == 1 and finals[0] not in ('', 'code'): r = {'ok': True, 'text': cands[0], 'judge': 'unanimous'}
+        f0 = finals[0] if finals else ''
+        if len(cands) >= 3 and f0 not in ('', 'code') and finals.count(f0) >= max(3, len(cands) - 1): r = {'ok': True, 'text': cands[0], 'judge': 'agree'}
         elif len(cands) > 1: r = judge_call(judges, q['q'], cands, cfg.get('judge_tokens', 900))
         else: r = {'ok': bool(cands), 'text': cands[0] if cands else '', 'judge': 'single'}
         lat = max([mem[m]['answers'].get(q['id'], {}).get('secs') or 0 for m in cfg['swarm'] if m in mem] or [0]) + (time.time() - t0)
@@ -329,14 +330,16 @@ def mode_agent(cfg_json, slot):
         good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
         q = rq['messages'][-1]['content']; tj = time.time()
         finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in good]
-        agree = len(good) >= 3 and len(set(finals)) == 1 and finals[0] not in ('', 'code') and 'ANSWER:' in (own.get('text') or '')
-        if agree: fin = {'ok': True, 'text': own['text'], 'judge': 'unanimous'}     # every agent got the same answer: no judge needed (self-consistency)
+        ownf = re.sub(r'[^a-z0-9.\-/]', '', final_answer(own.get('text') or '').lower())
+        agree = (len(good) >= 3 and ownf not in ('', 'code') and 'ANSWER:' in (own.get('text') or '')
+                 and finals.count(ownf) >= max(3, len(good) - 1))     # judge's own answer + all-but-one agree: accept without a judge pass
+        if agree: fin = {'ok': True, 'text': own['text'], 'judge': 'agree'}     # every agent got the same answer: no judge needed (self-consistency)
         elif len(good) > 1: fin = judge_call([{'kind': 'local', 'model': me['model']}], q, good, cfg.get('judge_tokens', 900))
         else: fin = {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
         text = fin.get('text') or ''
         shown = tidy(text)
         voiced = (JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)] + '\n\n' + shown) if shown else None
-        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('unanimous', 'single') else me['model'], 'n_ok': len(good), 'n_slots': len(slots),
+        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('agree', 'single') else me['model'], 'n_ok': len(good), 'n_slots': len(slots),
                'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None), 'text': (v.get('text') or '')[:4000]} for k, v in parts.items()},
                'judge_secs': round(time.time() - tj, 1), 'secs_runner': round(time.time() - t0, 1), 'run': RUN}
         dels = [path] + [f'heavy/part/{rq["id"]}/{k}.json' for k in parts]
