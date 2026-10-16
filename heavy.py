@@ -199,7 +199,8 @@ def num(s):
     s = s.replace(',', '').replace('$', ''); m = re.findall(r'-?\d+(?:\.\d+)?', s)
     return float(m[0]) if m else None
 def run_code(text, tests, fn):
-    blocks = re.findall(r'```(?:python)?\n(.*?)```', text or '', re.S)
+    blocks = re.findall(r'```(?:python|py)?\s*\n(.*?)```', text or '', re.S)
+    blocks = [b for b in blocks if re.search(r'def\s+%s\s*\(' % re.escape(fn), b)]
     if not blocks: return False
     src = blocks[-1] + '\n\n' + '\n'.join(f'assert {fn}({a}) == {e!r}' if not isinstance(e, float) else f'assert abs({fn}({a}) - {e!r}) < 1e-6' for a, e in tests) + '\nprint("PASS")\n'
     open('/tmp/t.py', 'w').write(src)
