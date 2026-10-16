@@ -143,7 +143,7 @@ def cpuinfo():
     return {'nproc': NPROC, 'mem_mb': mt, 'cpu': model.group(1) if model else '?', 'avx512': 'avx512f' in flags, 'avx2': 'avx2' in flags}
 def mode_probe(locals_csv):
     rep = {'run': RUN, 'runner': cpuinfo(), 'disk': subprocess.run(['df', '-h', '/', '/mnt'], capture_output=True, text=True).stdout, 'gm': {}, 'local': {}}
-    st, b, h = http('https://models.github.ai/catalog/models', headers={'Authorization': f'Bearer {GH}', 'Accept': 'application/json'})
+    st, b, h = http('https://models.github.ai/catalog/models', headers={'Authorization': f'Bearer {GH}', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
     rep['gm']['catalog_status'] = st
     try:
         cat = json.loads(b); rep['gm']['catalog'] = [{'id': m.get('id'), 'tier': m.get('rate_limit_tier'), 'pub': m.get('publisher'),
@@ -153,9 +153,10 @@ def mode_probe(locals_csv):
             'deepseek/DeepSeek-V3-0324', 'deepseek/DeepSeek-R1-0528', 'meta/Llama-4-Maverick-17B-128E-Instruct-FP8', 'meta/Meta-Llama-3.1-405B-Instruct',
             'meta/Llama-3.3-70B-Instruct', 'microsoft/Phi-4', 'microsoft/phi-4-reasoning', 'mistral-ai/mistral-medium-2505', 'xai/grok-3', 'xai/grok-3-mini', 'cohere/cohere-command-a']
     ids = [m['id'] for m in rep['gm'].get('catalog', [])]
-    for m in [w for w in want if w in ids][:14]:
+    rep['gm']['catalog_head'] = b[:300]
+    for m in ([w for w in want if w in ids] or want)[:17]:
         r = gm_chat(m, [{'role': 'user', 'content': 'What is 17*23? Reply with just the number.'}], 30, 0)
-        rep['gm'][m] = {k: r.get(k) for k in ('ok', 'status', 'secs', 'ratelimit', 'error')}; rep['gm'][m]['correct'] = bool(r.get('ok') and '391' in r.get('text', ''))
+        rep['gm'][m] = {k: r.get(k) for k in ('ok', 'status', 'secs', 'ratelimit', 'error', 'usage')}; rep['gm'][m]['correct'] = bool(r.get('ok') and '391' in r.get('text', ''))
         log('gm', m, r.get('ok'), r.get('status'), r.get('secs'))
     for name in [x for x in locals_csv.split(',') if x]:
         try:
