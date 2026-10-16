@@ -278,9 +278,68 @@ def mode_session(cfg_json):
         time.sleep(2)
     pool.shutdown(wait=True); beat_now('ended')
     log('session ended', 'served', len(done), 'idle' if time.time() - last_req >= idle else 'max')
+
+# ---------------- live swarm: one runner per agent slot (Grok-Heavy style: agents on separate machines, in parallel)
+JENA_PREFIX = ["ok i thought REALLY hard about this one with my helper brains 🧠", "big brain mode activated 🧠 here's what we figured out",
+               "i asked my whole brain team and we checked each other 🧠"]
+def mode_agent(cfg_json, slot):
+    cfg = json.loads(cfg_json); me = cfg['slots'][slot]; jslot = cfg['judge_slot']; slots = list(cfg['slots'])
+    idle, mx, mt = cfg.get('idle', 600), cfg.get('max', 3300), cfg.get('member_timeout', 240)
+    api = hf_api(); info = start_local(me['model'], par=2); t_start = last_req = time.time(); seen = set(); beat = 0
+    log('agent', slot, me['model'], 'ready', json.dumps(info))
+    def beat_now(state):
+        hf_put(api, {f'heavy/agents/{slot}.json': {'run': RUN, 'slot': slot, 'model': me['model'], 'state': state, 'ts': time.time(),
+                                                   'started': t_start, 'idle': idle, 'judge': slot == jslot, 'load': info}}, msg='heavy beat')
+    beat_now('ready'); beat = time.time(); pool = cf.ThreadPoolExecutor(4)
+    def answer(path, rq):
+        msgs = rq['messages']
+        r = member_call({'kind': 'local', 'model': me['model'], 'role': me.get('role', 'solver'), 'temp': me.get('temp', 0.3)}, msgs, me.get('max_tokens', 700))
+        hf_put(api, {f'heavy/part/{rq["id"]}/{slot}.json': {'slot': slot, 'model': me['model'], **{k: r.get(k) for k in ('ok', 'text', 'secs', 'gen_tps', 'error')}}}, msg='heavy part')
+        return r
+    def judge(path, rq):
+        t0 = time.time(); own = answer(path, rq); parts = {slot: own}
+        while time.time() - t0 < mt and len(parts) < len(slots):
+            try: have = [f.path for f in api.list_repo_tree(HF_REPO, path_in_repo=f'heavy/part/{rq["id"]}', repo_type='dataset')]
+            except Exception: have = []
+            for p in have:
+                s2 = p.rsplit('/', 1)[-1][:-5]
+                if s2 not in parts:
+                    d = hf_get(p)
+                    if d: parts[s2] = d
+            if len(parts) < len(slots): time.sleep(3)
+        good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
+        q = rq['messages'][-1]['content']; tj = time.time()
+        if len(good) > 1: fin = judge_call([{'kind': 'local', 'model': me['model']}], q, good, cfg.get('judge_tokens', 900))
+        else: fin = {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
+        text = fin.get('text') or ''
+        shown = re.sub(r'\n?ANSWER:\s*code\s*$', '', text.strip()).strip()
+        voiced = (JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)] + '\n\n' + shown) if shown else None
+        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': me['model'], 'n_ok': len(good), 'n_slots': len(slots),
+               'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None), 'text': (v.get('text') or '')[:4000]} for k, v in parts.items()},
+               'judge_secs': round(time.time() - tj, 1), 'secs_runner': round(time.time() - t0, 1), 'run': RUN}
+        dels = [path] + [f'heavy/part/{rq["id"]}/{k}.json' for k in parts]
+        hf_put(api, {f'heavy/ans/{rq["id"]}.json': ans}, deletes=dels, msg='heavy ans')
+        log('answered', round(time.time() - t0, 1), 's; members ok', len(good), 'of', len(slots))
+    while time.time() - t_start < mx and time.time() - last_req < idle:
+        try: files = [f.path for f in api.list_repo_tree(HF_REPO, path_in_repo='heavy/req', repo_type='dataset') if f.path.endswith('.json')]
+        except Exception: files = []
+        for p in files:
+            if p in seen: continue
+            seen.add(p); rq = hf_get(p)
+            if not rq: continue
+            last_req = time.time()
+            if time.time() - float(rq.get('ts', 0)) > mt + 120: continue      # stale request: the box already fell back
+            pool.submit(judge if slot == jslot else answer, p, rq)
+        if time.time() - beat > 90: beat_now('ready'); beat = time.time()
+        time.sleep(3)
+    beat_now('draining'); pool.shutdown(wait=True); beat_now('ended')
+    log('agent ended; requests seen', len(seen), 'reason', 'idle' if time.time() - last_req >= idle else 'max')
+
 if __name__ == '__main__':
     m = sys.argv[1]; a = sys.argv[2] if len(sys.argv) > 2 else ''
-    try: {'probe': mode_probe, 'member': mode_member, 'judge': mode_judge, 'session': mode_session}[m](a)
+    try:
+        if m == 'agent': mode_agent(a, sys.argv[3])
+        else: {'probe': mode_probe, 'member': mode_member, 'judge': mode_judge, 'session': mode_session}[m](a)
     except Exception:
         import traceback; tb = traceback.format_exc(); print(tb[-1500:], flush=True)
         try: hf_put(hf_api(), {f'heavy/errors/{RUN}.json': {'mode': m, 'tb': tb[-4000:]}}, msg='heavy error')

@@ -1,0 +1,40 @@
+name: swarm
+run-name: "swarm session [${{ inputs.req }}]"
+on:
+  workflow_dispatch:
+    inputs:
+      cfg: {description: "swarm config JSON (slots, judge_slot, idle, max)", required: true}
+      req: {description: "request id", required: false, default: manual}
+permissions:
+  contents: read
+concurrency: {group: swarm, cancel-in-progress: false}
+jobs:
+  agent:
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: ${{ fromJSON(inputs.cfg).slot_names }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: llama.cpp (prebuilt CPU release)
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          set -e
+          url=$(curl -sSf -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=8" \
+            | python3 -c "import json,sys,re; rs=json.load(sys.stdin); print(next(a['browser_download_url'] for r in rs for a in r['assets'] if re.search(r'bin-ubuntu-x64\.(tar\.gz|zip)$', a['name'])))")
+          mkdir -p llama && cd llama && curl -sSfL -o pkg "$url"
+          (tar xzf pkg 2>/dev/null || unzip -q pkg) && rm pkg
+          f=$(find . -name llama-server -type f | head -1); d=$(dirname "$f"); cp -a "$d"/* .
+      - run: pip install -q huggingface_hub && sudo mkdir -p /mnt/models && sudo chown $USER /mnt/models
+      - name: agent
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CFG: ${{ inputs.cfg }}
+          SLOT: ${{ matrix.slot }}
+          OUT: ${{ github.workspace }}/out
+          MODEL_DIR: /mnt/models
+          LLAMA_BIN: ${{ github.workspace }}/llama/llama-server
+          LD_LIBRARY_PATH: ${{ github.workspace }}/llama
+        run: python3 heavy.py agent "$CFG" "$SLOT"
