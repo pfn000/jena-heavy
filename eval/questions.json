@@ -1,0 +1,414 @@
+[
+ {
+  "id": "m1",
+  "cat": "math",
+  "q": "A bakery sells cupcakes for $3 each or 4 for $10. Maya needs exactly 18 cupcakes (she can't buy more than she needs). What is the least amount in dollars she can pay?",
+  "type": "num",
+  "answer": 46
+ },
+ {
+  "id": "m2",
+  "cat": "math",
+  "q": "A train leaves at 2:45 PM and travels 210 miles at a steady 60 miles per hour. How many minutes after 5:00 PM does it arrive?",
+  "type": "num",
+  "answer": 75
+ },
+ {
+  "id": "m3",
+  "cat": "math",
+  "q": "Tom has twice as many marbles as Ana. After Tom gives Ana 12 marbles, they have the same number. How many marbles did Tom have at first?",
+  "type": "num",
+  "answer": 48
+ },
+ {
+  "id": "m4",
+  "cat": "math",
+  "q": "A shirt costs $40. It is discounted by 25%, then the sale price is increased by 20%. What is the final price in dollars?",
+  "type": "num",
+  "answer": 36
+ },
+ {
+  "id": "m5",
+  "cat": "math",
+  "q": "The average of five numbers is 18. When one number is removed, the average of the remaining four is 16. What number was removed?",
+  "type": "num",
+  "answer": 26
+ },
+ {
+  "id": "m6",
+  "cat": "math",
+  "q": "How many positive integers less than 100 are divisible by 3 or by 5?",
+  "type": "num",
+  "answer": 46
+ },
+ {
+  "id": "m7",
+  "cat": "math",
+  "q": "A rectangle's length is 3 more than twice its width. Its perimeter is 54. What is its area?",
+  "type": "num",
+  "answer": 152
+ },
+ {
+  "id": "m8",
+  "cat": "math",
+  "q": "Liam reads 15 pages on day 1, and each day after that he reads 5 more pages than the day before. How many pages has he read in total after 8 days?",
+  "type": "num",
+  "answer": 260
+ },
+ {
+  "id": "m9",
+  "cat": "math",
+  "q": "If 3 workers can paint 3 fences in 3 hours, how many hours do 6 workers need to paint 6 fences at the same rate?",
+  "type": "num",
+  "answer": 3
+ },
+ {
+  "id": "m10",
+  "cat": "math",
+  "q": "What is the remainder when 2^100 is divided by 7?",
+  "type": "num",
+  "answer": 2
+ },
+ {
+  "id": "m11",
+  "cat": "math",
+  "q": "A store had 200 apples. It sold 35% of them on Monday and 40% of the remaining apples on Tuesday. How many apples are left?",
+  "type": "num",
+  "answer": 78
+ },
+ {
+  "id": "m12",
+  "cat": "math",
+  "q": "Sam is 4 times as old as his daughter. In 20 years he will be twice as old as she will be. How old is Sam now?",
+  "type": "num",
+  "answer": 40
+ },
+ {
+  "id": "l1",
+  "cat": "logic",
+  "q": "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How many cents does the ball cost?",
+  "type": "num",
+  "answer": 5
+ },
+ {
+  "id": "l2",
+  "cat": "logic",
+  "q": "You are running a race and you pass the person in second place. What place are you in now? Answer with a number.",
+  "type": "num",
+  "answer": 2
+ },
+ {
+  "id": "l3",
+  "cat": "logic",
+  "q": "Some flowers are red. All red things are pretty. Can we conclude that some flowers are pretty? Answer yes or no.",
+  "type": "choice",
+  "answer": [
+   "yes"
+  ]
+ },
+ {
+  "id": "l4",
+  "cat": "logic",
+  "q": "All bloops are razzies and all razzies are lazzies. Are all bloops definitely lazzies? Answer yes or no.",
+  "type": "choice",
+  "answer": [
+   "yes"
+  ]
+ },
+ {
+  "id": "l5",
+  "cat": "logic",
+  "q": "Mary's father has five daughters. Four of them are named Nana, Nene, Nini and Nono. What is the fifth daughter's name?",
+  "type": "keyword",
+  "answer": [
+   "Mary"
+  ]
+ },
+ {
+  "id": "l6",
+  "cat": "logic",
+  "q": "There are 3 boxes: one has only apples, one only oranges, one both. Every label is wrong. From the box labeled 'both' you pull out an apple. What is actually inside the box labeled 'oranges'? Answer apples, oranges, or both.",
+  "type": "choice",
+  "answer": [
+   "both",
+   "apples and oranges",
+   "both apples and oranges"
+  ]
+ },
+ {
+  "id": "l7",
+  "cat": "logic",
+  "q": "A snail climbs 3 meters up a 10-meter wall each day and slides down 2 meters each night. On which day does it first reach the top? Answer with the day number.",
+  "type": "num",
+  "answer": 8
+ },
+ {
+  "id": "l8",
+  "cat": "logic",
+  "q": "How many times does the letter 'r' appear in the word 'strawberry'?",
+  "type": "num",
+  "answer": 3
+ },
+ {
+  "id": "l9",
+  "cat": "logic",
+  "q": "Alice is taller than Bob. Bob is taller than Carol. Dave is shorter than Carol. Who is the second shortest? Answer with the name.",
+  "type": "keyword",
+  "answer": [
+   "Carol"
+  ]
+ },
+ {
+  "id": "l10",
+  "cat": "logic",
+  "q": "What day of the week will it be 100 days after a Wednesday?",
+  "type": "keyword",
+  "answer": [
+   "Friday"
+  ]
+ },
+ {
+  "id": "c1",
+  "cat": "code",
+  "q": "Write a Python function is_palindrome(s) that returns True if the string s reads the same forwards and backwards, ignoring case and ignoring every character that is not a letter or digit.",
+  "type": "code",
+  "answer": null,
+  "fn": "is_palindrome",
+  "tests": [
+   [
+    "'A man, a plan, a canal: Panama'",
+    true
+   ],
+   [
+    "'race a car'",
+    false
+   ],
+   [
+    "''",
+    true
+   ],
+   [
+    "'No lemon, no melon'",
+    true
+   ]
+  ]
+ },
+ {
+  "id": "c2",
+  "cat": "code",
+  "q": "Write a Python function fizzbuzz(n) that returns a list of strings for 1..n: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for multiples of both, otherwise the number as a string.",
+  "type": "code",
+  "answer": null,
+  "fn": "fizzbuzz",
+  "tests": [
+   [
+    "5",
+    [
+     "1",
+     "2",
+     "Fizz",
+     "4",
+     "Buzz"
+    ]
+   ],
+   [
+    "15",
+    [
+     "1",
+     "2",
+     "Fizz",
+     "4",
+     "Buzz",
+     "Fizz",
+     "7",
+     "8",
+     "Fizz",
+     "Buzz",
+     "11",
+     "Fizz",
+     "13",
+     "14",
+     "FizzBuzz"
+    ]
+   ]
+  ]
+ },
+ {
+  "id": "c3",
+  "cat": "code",
+  "q": "Write a Python function second_largest(nums) that returns the second largest DISTINCT value in the list nums, or None if there isn't one.",
+  "type": "code",
+  "answer": null,
+  "fn": "second_largest",
+  "tests": [
+   [
+    "[3,1,4,4,2]",
+    3
+   ],
+   [
+    "[5,5]",
+    null
+   ],
+   [
+    "[1,2]",
+    1
+   ],
+   [
+    "[7]",
+    null
+   ]
+  ]
+ },
+ {
+  "id": "c4",
+  "cat": "code",
+  "q": "Write a Python function word_count(s) that returns a dict mapping each lowercase word to how many times it appears in s, where words are runs of letters (a-z, any case) and everything else separates words.",
+  "type": "code",
+  "answer": null,
+  "fn": "word_count",
+  "tests": [
+   [
+    "'The cat and the hat'",
+    {
+     "the": 2,
+     "cat": 1,
+     "and": 1,
+     "hat": 1
+    }
+   ],
+   [
+    "'Hi! hi?'",
+    {
+     "hi": 2
+    }
+   ]
+  ]
+ },
+ {
+  "id": "c5",
+  "cat": "code",
+  "q": "Write a Python function merge_intervals(intervals) that takes a list of [start, end] lists and returns the merged, sorted list of [start, end] lists, merging intervals that overlap or touch.",
+  "type": "code",
+  "answer": null,
+  "fn": "merge_intervals",
+  "tests": [
+   [
+    "[[1,3],[2,6],[8,10],[15,18]]",
+    [
+     [
+      1,
+      6
+     ],
+     [
+      8,
+      10
+     ],
+     [
+      15,
+      18
+     ]
+    ]
+   ],
+   [
+    "[[1,4],[4,5]]",
+    [
+     [
+      1,
+      5
+     ]
+    ]
+   ],
+   [
+    "[[5,7],[1,2]]",
+    [
+     [
+      1,
+      2
+     ],
+     [
+      5,
+      7
+     ]
+    ]
+   ]
+  ]
+ },
+ {
+  "id": "c6",
+  "cat": "code",
+  "q": "Write a Python function roman_to_int(s) that converts a Roman numeral string to an integer.",
+  "type": "code",
+  "answer": null,
+  "fn": "roman_to_int",
+  "tests": [
+   [
+    "'MCMXCIV'",
+    1994
+   ],
+   [
+    "'LVIII'",
+    58
+   ],
+   [
+    "'IX'",
+    9
+   ],
+   [
+    "'MMXXVI'",
+    2026
+   ]
+  ]
+ },
+ {
+  "id": "f1",
+  "cat": "facts",
+  "q": "What is the chemical symbol for gold?",
+  "type": "keyword",
+  "answer": [
+   "Au"
+  ]
+ },
+ {
+  "id": "f2",
+  "cat": "facts",
+  "q": "What is the largest organ of the human body?",
+  "type": "keyword",
+  "answer": [
+   "skin"
+  ]
+ },
+ {
+  "id": "f3",
+  "cat": "facts",
+  "q": "In what year did humans first land on the Moon?",
+  "type": "num",
+  "answer": 1969
+ },
+ {
+  "id": "f4",
+  "cat": "facts",
+  "q": "What is the capital city of Australia?",
+  "type": "keyword",
+  "answer": [
+   "Canberra"
+  ]
+ },
+ {
+  "id": "f5",
+  "cat": "facts",
+  "q": "Which gas do plants take in from the air for photosynthesis?",
+  "type": "keyword",
+  "answer": [
+   "carbon dioxide",
+   "CO2",
+   "CO\u2082"
+  ]
+ },
+ {
+  "id": "f6",
+  "cat": "facts",
+  "q": "How many bones does an adult human body usually have?",
+  "type": "num",
+  "answer": 206
+ }
+]

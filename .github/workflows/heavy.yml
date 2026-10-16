@@ -1,0 +1,44 @@
+name: heavy
+run-name: "heavy ${{ inputs.mode }} [${{ inputs.req }}]"
+on:
+  workflow_dispatch:
+    inputs:
+      mode: {description: "probe | member | judge | session", required: true, default: probe}
+      arg: {description: "mode argument (JSON or csv)", required: false, default: "qwen7b"}
+      req: {description: "request id", required: false, default: manual}
+permissions:
+  contents: read
+  models: read
+jobs:
+  heavy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: llama.cpp (prebuilt CPU release)
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          set -e
+          url=$(curl -sSf -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=8" \
+            | python3 -c "import json,sys,re; rs=json.load(sys.stdin); print(next(a['browser_download_url'] for r in rs for a in r['assets'] if re.search(r'bin-ubuntu-x64\.(tar\.gz|zip)$', a['name'])))")
+          echo "llama.cpp: $url"
+          mkdir -p llama && cd llama && curl -sSfL -o pkg "$url"
+          (tar xzf pkg 2>/dev/null || unzip -q pkg) && rm pkg
+          f=$(find . -name llama-server -type f | head -1); d=$(dirname "$f"); cp -a "$d"/* . ; ls | head -50
+          ./llama-server --version || true
+      - run: pip install -q huggingface_hub
+      - name: run
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          ARG: ${{ inputs.arg }}
+          OUT: ${{ github.workspace }}/out
+          LLAMA_BIN: ${{ github.workspace }}/llama/llama-server
+          LD_LIBRARY_PATH: ${{ github.workspace }}/llama
+        run: |
+          case "$MODE" in probe|member|judge|session) ;; *) echo bad mode; exit 2;; esac
+          python3 heavy.py "$MODE" "$ARG"
+      - name: llama logs (timings only)
+        if: always()
+        run: grep -h -E "eval time|load time|prompt eval|system_info|n_threads" out/llama-*.log 2>/dev/null | tail -40 || true
