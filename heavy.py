@@ -89,9 +89,10 @@ def start_local(name, threads=None, ctx=4096, par=1):
         if p.poll() is not None: raise RuntimeError(f'llama {name} exited')
         time.sleep(1)
     return {'download_s': dl, 'load_s': round(time.time() - t0, 1), 'size_gb': round(os.path.getsize(path) / 1e9, 2)}
-def local_chat(name, messages, max_tokens=600, temperature=0.3, timeout=600):
-    port = LOCAL[name][2]; t0 = time.time()
-    st, b, _ = http(f'http://127.0.0.1:{port}/v1/chat/completions', {'messages': messages, 'max_tokens': max_tokens, 'temperature': temperature, 'cache_prompt': True}, timeout=timeout)
+def local_chat(name, messages, max_tokens=600, temperature=0.3, timeout=900, effort=None):
+    port = LOCAL[name][2]; t0 = time.time(); body = {'messages': messages, 'max_tokens': max_tokens, 'temperature': temperature, 'cache_prompt': True}
+    if effort and LOCAL[name][3] == 'oss': body['chat_template_kwargs'] = {'reasoning_effort': effort}
+    st, b, _ = http(f'http://127.0.0.1:{port}/v1/chat/completions', body, timeout=timeout)
     if st != 200: return {'ok': False, 'status': st, 'error': b[:300], 'secs': round(time.time() - t0, 1)}
     j = json.loads(b); tm = j.get('timings') or {}
     return {'ok': True, 'text': j['choices'][0]['message'].get('content') or '', 'reasoning_chars': len(j['choices'][0]['message'].get('reasoning_content') or ''), 'secs': round(time.time() - t0, 1),
@@ -100,7 +101,7 @@ def local_chat(name, messages, max_tokens=600, temperature=0.3, timeout=600):
 def member_call(spec, messages, max_tokens=600):
     kind, name, role, temp = spec['kind'], spec['model'], spec.get('role', 'solver'), spec.get('temp', 0.3)
     msgs = [{'role': 'system', 'content': ROLES[role]}] + [m for m in messages if m['role'] != 'system']
-    return gm_chat(name, msgs, max_tokens, temp) if kind == 'gm' else local_chat(name, msgs, max_tokens, temp)
+    return gm_chat(name, msgs, max_tokens, temp) if kind == 'gm' else local_chat(name, msgs, max_tokens, temp, effort=spec.get('effort'))
 def judge_call(judges, question, cands, max_tokens=900):
     lines = [f'QUESTION:\n{question}\n']
     for i, c in enumerate(cands): lines.append(f'--- CANDIDATE {i + 1} ---\n{c[:3500]}\n')
@@ -309,12 +310,14 @@ def mode_agent(cfg_json, slot):
     beat_now('ready'); beat = time.time(); pool = cf.ThreadPoolExecutor(4)
     def answer(path, rq):
         msgs = rq['messages']
-        r = member_call({'kind': 'local', 'model': me['model'], 'role': me.get('role', 'solver'), 'temp': me.get('temp', 0.3)}, msgs, me.get('max_tokens', 700))
+        deep = rq.get('effort') == 'medium'
+        r = member_call({'kind': 'local', 'model': me['model'], 'role': me.get('role', 'solver'), 'temp': me.get('temp', 0.3), 'effort': rq.get('effort')}, msgs,
+                        int(me.get('max_tokens', 700) * (3 if deep else 1)))
         hf_put(api, {f'heavy/part/{rq["id"]}/{slot}.json': {'slot': slot, 'model': me['model'], **{k: r.get(k) for k in ('ok', 'text', 'secs', 'gen_tps', 'error')}}}, msg='heavy part')
         return r
     def judge(path, rq):
         t0 = time.time(); own = answer(path, rq); parts = {slot: own}
-        while time.time() - t0 < mt and len(parts) < len(slots):
+        while time.time() - t0 < mt * (3 if rq.get('effort') == 'medium' else 1) and len(parts) < len(slots):
             try: have = [f.path for f in api.list_repo_tree(HF_REPO, path_in_repo=f'heavy/part/{rq["id"]}', repo_type='dataset')]
             except Exception: have = []
             for p in have:
