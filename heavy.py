@@ -177,10 +177,10 @@ def mode_probe(locals_csv):
         rep['local'][name] = info; log('local', name, json.dumps(info))
     json.dump(rep, open(f'{OUT}/probe.json', 'w'), indent=1)
     api = hf_api(); hf_put(api, {f'heavy/probe/{RUN}.json': rep}, msg='heavy probe')
-def load_eval():
-    return json.load(open('eval/questions.json'))
+def load_eval(qfile=None):
+    return json.load(open(qfile or os.environ.get('QFILE') or 'eval/questions.json'))
 def mode_member(spec_json):
-    spec = json.loads(spec_json); qs = load_eval(); out = {'spec': spec, 'runner': cpuinfo(), 'answers': {}}
+    spec = json.loads(spec_json); qs = load_eval(spec.get('qfile')); out = {'spec': spec, 'runner': cpuinfo(), 'answers': {}}
     if spec['kind'] == 'local': out['load'] = start_local(spec['model'], par=spec.get('par', 1))
     def one(q):
         msgs = [{'role': 'user', 'content': q['q']}]
@@ -190,7 +190,7 @@ def mode_member(spec_json):
     with cf.ThreadPoolExecutor(par) as ex:
         for qid, r in ex.map(one, qs): out['answers'][qid] = r; log(spec['id'], qid, r.get('ok'), r.get('secs'))
     out['wall_s'] = round(time.time() - t0, 1)
-    api = hf_api(); hf_put(api, {f'heavy/eval/{spec["id"]}.json': out}, msg='heavy eval member ' + spec['id'])
+    api = hf_api(); hf_put(api, {f'heavy/eval/{spec["id"]}{spec.get("suffix", "")}.json': out}, msg='heavy eval member ' + spec['id'])
 # ----- scoring
 def final_answer(t):
     m = re.findall(r'ANSWER:\s*(.+)', t or '')
@@ -216,16 +216,18 @@ def score(q, text):
     if t == 'code': return int(run_code(text, q['tests'], q['fn']))
     return 0
 def mode_judge(cfg_json):
-    cfg = json.loads(cfg_json); qs = load_eval(); mem = {}
+    cfg = json.loads(cfg_json); qs = load_eval(cfg.get('qfile')); mem = {}; sfx = cfg.get('suffix', '')
+    for j in cfg['judges']:
+        if j['kind'] == 'local': cfg.setdefault('judge_load', {})[j['model']] = start_local(j['model'], par=3)
     for mid in cfg['members']:
-        d = hf_get(f'heavy/eval/{mid}.json')
+        d = hf_get(f'heavy/eval/{mid}{sfx}.json')
         if d: mem[mid] = d
     log('members loaded', list(mem))
     judges = cfg['judges']; rows = []
     def one(q):
         cands = [mem[m]['answers'].get(q['id'], {}).get('text') for m in cfg['swarm'] if m in mem]
         cands = [c for c in cands if c and c.strip()]
-        t0 = time.time(); r = judge_call(judges, q['q'], cands) if len(cands) > 1 else {'ok': bool(cands), 'text': cands[0] if cands else '', 'judge': 'single'}
+        t0 = time.time(); r = judge_call(judges, q['q'], cands, cfg.get('judge_tokens', 900)) if len(cands) > 1 else {'ok': bool(cands), 'text': cands[0] if cands else '', 'judge': 'single'}
         lat = max([mem[m]['answers'].get(q['id'], {}).get('secs') or 0 for m in cfg['swarm'] if m in mem] or [0]) + (time.time() - t0)
         return q, r, round(lat, 1)
     with cf.ThreadPoolExecutor(3) as ex: res = list(ex.map(one, qs))
@@ -242,7 +244,7 @@ def mode_judge(cfg_json):
             'lat_median_s': round(statistics.median(lat), 1) if lat else None, 'lat_max_s': max(lat) if lat else None}
     out = {'cfg': cfg, 'table': table, 'judged': {q['id']: r for q, r, _ in res}}
     json.dump(out, open(f'{OUT}/eval-table.json', 'w'), indent=1)
-    api = hf_api(); hf_put(api, {f'heavy/eval/table-{RUN}.json': out}, msg='heavy eval table')
+    api = hf_api(); hf_put(api, {f'heavy/eval/table-{cfg.get("name", RUN)}.json': out}, msg='heavy eval table')
     log('table', json.dumps({k: v['score'] for k, v in {**table['members'], **table['heavy']}.items()}))
 def mode_session(cfg_json):
     """Live requests: box writes heavy/req/<id>.json to the private dataset; we answer into heavy/ans/<id>.json.
