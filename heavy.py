@@ -155,7 +155,8 @@ def mode_probe(locals_csv):
     ids = [m['id'] for m in rep['gm'].get('catalog', [])]
     rep['gm']['catalog_head'] = b[:300]
     for m in ([w for w in want if w in ids] or want)[:17]:
-        r = gm_chat(m, [{'role': 'user', 'content': 'What is 17*23? Reply with just the number.'}], 30, 0)
+        try: r = gm_chat(m, [{'role': 'user', 'content': 'What is 17*23? Reply with just the number.'}], 30, 0) or {}
+        except Exception as e: r = {'ok': False, 'error': repr(e)[:300]}
         rep['gm'][m] = {k: r.get(k) for k in ('ok', 'status', 'secs', 'ratelimit', 'error', 'usage')}; rep['gm'][m]['correct'] = bool(r.get('ok') and '391' in r.get('text', ''))
         log('gm', m, r.get('ok'), r.get('status'), r.get('secs'))
     for name in [x for x in locals_csv.split(',') if x]:
@@ -275,6 +276,11 @@ def mode_session(cfg_json):
 if __name__ == '__main__':
     m = sys.argv[1]; a = sys.argv[2] if len(sys.argv) > 2 else ''
     try: {'probe': mode_probe, 'member': mode_member, 'judge': mode_judge, 'session': mode_session}[m](a)
+    except Exception:
+        import traceback; tb = traceback.format_exc(); print(tb[-1500:], flush=True)
+        try: hf_put(hf_api(), {f'heavy/errors/{RUN}.json': {'mode': m, 'tb': tb[-4000:]}}, msg='heavy error')
+        except Exception: pass
+        raise
     finally:
         for p in PROCS.values():
             try: p.terminate()
