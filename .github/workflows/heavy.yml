@@ -26,7 +26,7 @@ jobs:
           (tar xzf pkg 2>/dev/null || unzip -q pkg) && rm pkg
           f=$(find . -name llama-server -type f | head -1); d=$(dirname "$f"); cp -a "$d"/* . ; ls | head -50
           ./llama-server --version || true
-      - run: pip install -q huggingface_hub
+      - run: pip install -q huggingface_hub && sudo mkdir -p /mnt/models && sudo chown $USER /mnt/models && df -h / /mnt
       - name: run
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -34,6 +34,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           ARG: ${{ inputs.arg }}
           OUT: ${{ github.workspace }}/out
+          MODEL_DIR: /mnt/models
           LLAMA_BIN: ${{ github.workspace }}/llama/llama-server
           LD_LIBRARY_PATH: ${{ github.workspace }}/llama
         run: |

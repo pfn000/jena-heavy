@@ -65,7 +65,7 @@ def gm_chat(model, messages, max_tokens=700, temperature=0.3, timeout=120):
 # ---------------- llama.cpp on the runner
 PROCS = {}
 def fetch_model(name):
-    src, fn, port, tpl = LOCAL[name]; os.makedirs('models', exist_ok=True); dst = f'models/{os.path.basename(fn)}'
+    src, fn, port, tpl = LOCAL[name]; md = os.environ.get('MODEL_DIR', 'models'); os.makedirs(md, exist_ok=True); dst = f'{md}/{os.path.basename(fn)}'
     if os.path.exists(dst): return dst, 0.0
     t0 = time.time()
     if src == 'hf-private':
@@ -142,7 +142,7 @@ def cpuinfo():
     model = re.search(r'model name\s*:\s*(.*)', open('/proc/cpuinfo').read()); flags = open('/proc/cpuinfo').read()
     return {'nproc': NPROC, 'mem_mb': mt, 'cpu': model.group(1) if model else '?', 'avx512': 'avx512f' in flags, 'avx2': 'avx2' in flags}
 def mode_probe(locals_csv):
-    rep = {'run': RUN, 'runner': cpuinfo(), 'gm': {}, 'local': {}}
+    rep = {'run': RUN, 'runner': cpuinfo(), 'disk': subprocess.run(['df', '-h', '/', '/mnt'], capture_output=True, text=True).stdout, 'gm': {}, 'local': {}}
     st, b, h = http('https://models.github.ai/catalog/models', headers={'Authorization': f'Bearer {GH}', 'Accept': 'application/json'})
     rep['gm']['catalog_status'] = st
     try:
@@ -165,6 +165,7 @@ def mode_probe(locals_csv):
             info.update({'gen_tps': r2.get('gen_tps'), 'pp_tps': r1.get('pp_tps'), 'first_call_s': r1.get('secs'), 'second_call_s': r2.get('secs'), 'gen_tokens': r2.get('gen_tokens')})
             info['rss_mb'] = int(open(f'/proc/{PROCS[name].pid}/status').read().split('VmRSS:')[1].split()[0]) // 1024
             PROCS[name].terminate(); PROCS[name].wait(20)
+            for f in os.listdir(os.environ.get('MODEL_DIR', 'models')): os.remove(os.path.join(os.environ.get('MODEL_DIR', 'models'), f))
         except Exception as e: info = {'error': repr(e)[:300]}
         rep['local'][name] = info; log('local', name, json.dumps(info))
     json.dump(rep, open(f'{OUT}/probe.json', 'w'), indent=1)
