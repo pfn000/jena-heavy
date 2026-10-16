@@ -195,6 +195,7 @@ def mode_member(spec_json):
 # ----- scoring
 def final_answer(t):
     m = re.findall(r'ANSWER:\s*(.+)', t or '')
+    if not m: m = re.findall(r'\\boxed\{([^{}]+)\}', t or '')
     return m[-1].strip().strip('*').strip() if m else (t or '').strip().splitlines()[-1] if (t or '').strip() else ''
 def num(s):
     s = s.replace(',', '').replace('$', ''); m = re.findall(r'-?\d+(?:\.\d+)?', s)
