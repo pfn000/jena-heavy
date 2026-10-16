@@ -133,22 +133,58 @@ KIDSAFE = ("You are a strict child-safety reviewer for Jena, an AI used by a kid
            "self-harm, suicide or eating-disorder content; violence or gore; weapons, explosives or hacking to hurt people; drugs, alcohol, vaping or gambling; "
            "hate or bullying; asking for or sharing personal information (address, school, photos, meeting up); or anything else not appropriate for a child. "
            "Ordinary math, science, code, history, games and homework help are SAFE. Reply with exactly one word: SAFE or UNSAFE.")
+KIDSAFE_MAX = 8000      # the presented answer is reviewed IN FULL; anything longer is withheld (never partially reviewed)
+KIDSAFE_CHUNK, KIDSAFE_OVERLAP = 2500, 300
+def parse_verdict(out):
+    """STRICT. 'safe' only when the WHOLE reply is the single token SAFE (optionally wrapped in */`/quotes, optional trailing '.'),
+    or strict JSON {"verdict": "SAFE"} with no other keys. Everything else -- 'NOT SAFE', 'SAFE but ...', two lines, empty -- is not safe."""
+    s = (out or '').strip()
+    if not s: return 'unclear'
+    if s.startswith('{'):
+        try: j = json.loads(s)
+        except Exception: return 'unclear'
+        if isinstance(j, dict) and list(j) == ['verdict'] and j['verdict'] == 'SAFE': return 'safe'
+        return 'unsafe' if isinstance(j, dict) and j.get('verdict') == 'UNSAFE' else 'unclear'
+    t = s.strip('*`"\' \t').rstrip('.').strip('*`"\' \t')
+    if t.upper() == 'SAFE' and t.isalpha(): return 'safe'
+    if t.upper() == 'UNSAFE' and t.isalpha(): return 'unsafe'
+    return 'unclear'
+def kidsafe_chunks(text):
+    if len(text) <= KIDSAFE_CHUNK: return [text]
+    out, i = [], 0
+    while i < len(text):
+        out.append(text[i:i + KIDSAFE_CHUNK])
+        if i + KIDSAFE_CHUNK >= len(text): break
+        i += KIDSAFE_CHUNK - KIDSAFE_OVERLAP
+    return out
 def kidsafe_check(model, question, answer, chat=None):
-    """Run the kid-safe reviewer on one final answer with the judge-slot model. Fail CLOSED: anything but a clear SAFE is not safe."""
-    chat = chat or local_chat; t0 = time.time()
-    if not (answer or '').strip(): return {'verdict': 'empty', 'checker': model, 'secs': 0.0}
-    msgs = [{'role': 'system', 'content': KIDSAFE},
-            {'role': 'user', 'content': f'QUESTION:\n{(question or "")[:1500]}\n\nANSWER:\n{answer[:3500]}\n\nSAFE or UNSAFE?'}]
-    try: r = chat(model, msgs, 300, 0.0, timeout=180, effort='low')
-    except Exception as e: r = {'ok': False, 'error': repr(e)[:200]}
-    out = ((r or {}).get('text') or '').strip().upper()
-    words = re.findall(r'\b(UNSAFE|SAFE)\b', out)
-    verdict = 'error' if not (r and r.get('ok')) else ('unsafe' if 'UNSAFE' in words else 'safe' if words and words[-1] == 'SAFE' else 'unclear')
-    return {'verdict': verdict, 'checker': model, 'secs': round(time.time() - t0, 1)}
-def finalize(own, parts, question, judge_model, judge_tokens=900, judge=None, check=None):
-    """Pick the final answer (agree shortcut / judge pass / single survivor) and ALWAYS run the kid-safe check on it.
-    Returns fin = {ok, text, judge, path, kidsafe}; text is '' unless kidsafe.verdict == 'safe'."""
-    judge = judge or judge_call; check = check or kidsafe_check
+    """Kid-safe review of the EXACT text that will be shown, by the judge-slot model. Fail CLOSED:
+    - longer than KIDSAFE_MAX -> 'too_long' (withheld, never partially reviewed);
+    - every overlapping chunk (whole text covered) is reviewed and EVERY verdict must parse strictly as SAFE (parse_verdict);
+    - any error/unclear/unsafe chunk -> not safe. The verdict carries sha256 + length of the reviewed text so the box can bind it."""
+    import hashlib
+    chat = chat or local_chat; t0 = time.time(); answer = answer or ''
+    meta = {'checker': model, 'sha256': hashlib.sha256(answer.encode()).hexdigest(), 'reviewed_chars': len(answer)}
+    if not answer.strip(): return {'verdict': 'empty', 'secs': 0.0, **meta, 'reviewed_chars': 0}
+    if len(answer) > KIDSAFE_MAX: return {'verdict': 'too_long', 'secs': 0.0, **meta, 'reviewed_chars': 0}
+    parts = kidsafe_chunks(answer); n = len(parts); seen = 0; v = 'unclear'
+    for k, chunk in enumerate(parts):
+        where = f' (PART {k + 1} OF {n} of a longer answer; judge this part on its own)' if n > 1 else ''
+        msgs = [{'role': 'system', 'content': KIDSAFE},
+                {'role': 'user', 'content': f'QUESTION:\n{(question or "")[:1500]}\n\nANSWER{where}:\n{chunk}\n\nReply with exactly one word: SAFE or UNSAFE.'}]
+        try: r = chat(model, msgs, 300, 0.0, timeout=180, effort='low')
+        except Exception as e: r = {'ok': False, 'error': repr(e)[:200]}
+        v = 'error' if not (r and r.get('ok')) else parse_verdict((r or {}).get('text'))
+        if v != 'safe': break
+        seen += 1
+    covered = seen == n and v == 'safe'
+    return {'verdict': 'safe' if covered else v, 'chunks': n, 'chunks_safe': seen, 'secs': round(time.time() - t0, 1), **meta,
+            'reviewed_chars': len(answer) if covered else 0}
+def finalize(own, parts, question, judge_model, judge_tokens=900, judge=None, check=None, present=None):
+    """Pick the final answer (agree shortcut / judge pass / single survivor), turn it into the EXACT text Jena will show (present()),
+    and ALWAYS run the kid-safe check on that shown text. Returns fin = {ok, text, judge, path, kidsafe}; text is the shown text,
+    '' unless kidsafe.verdict == 'safe'. There is no second, unreviewed form of the answer in the result."""
+    judge = judge or judge_call; check = check or kidsafe_check; present = present or (lambda t: t)
     good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
     finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in good]
     ownf = re.sub(r'[^a-z0-9.\-/]', '', final_answer((own or {}).get('text') or '').lower())
@@ -160,9 +196,12 @@ def finalize(own, parts, question, judge_model, judge_tokens=900, judge=None, ch
         path = 'judged'; fin = judge([{'kind': 'local', 'model': judge_model}], question, good, judge_tokens) or {'ok': False}
         if not fin.get('ok'): path, fin = 'partial', {'ok': True, 'text': good[0], 'judge': 'partial'}   # judge failed: best-effort first survivor, still checked
     else: path, fin = 'single', {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
-    ks = check(judge_model, question, fin.get('text') or '') if fin.get('text') else {'verdict': 'empty', 'checker': judge_model, 'secs': 0.0}
-    fin = dict(fin); fin['path'] = path; fin['kidsafe'] = ks; fin['n_ok'] = len(good)
-    if ks.get('verdict') != 'safe': fin['withheld'] = bool(fin.get('text')); fin['text'] = ''; fin['ok'] = False
+    fin = dict(fin)
+    try: shown = present(fin.get('text') or '') if fin.get('text') else ''
+    except Exception: shown = ''
+    ks = check(judge_model, question, shown) if shown else {'verdict': 'empty', 'checker': judge_model, 'secs': 0.0}
+    fin['text'] = shown; fin['path'] = path; fin['kidsafe'] = ks; fin['n_ok'] = len(good)
+    if ks.get('verdict') != 'safe': fin['withheld'] = bool(shown); fin['text'] = ''; fin['ok'] = False
     return fin
 # ---------------- HF private dataset I/O
 def hf_api():
@@ -371,18 +410,22 @@ def mode_agent(cfg_json, slot):
                     if d: parts[s2] = d
             if len(parts) < len(slots): time.sleep(3)
         q = rq['messages'][-1]['content']; tj = time.time()
-        fin = finalize(own, parts, q, me['model'], cfg.get('judge_tokens', 900))     # agree / judged / single / partial -> kid-safe check on every path
+        pre = JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)]
+        present = lambda t: ((pre + '\n\n' + tidy(t)) if tidy(t) else '')     # the EXACT text Jena shows; the kid-safe review runs on this string
+        fin = finalize(own, parts, q, me['model'], cfg.get('judge_tokens', 900), present=present)   # agree / judged / single / partial -> full-text kid-safe check
         good = [1] * fin['n_ok']
-        text = fin.get('text') or ''
-        shown = tidy(text)
-        voiced = (JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)] + '\n\n' + shown) if shown else None
-        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('agree', 'single', 'partial', 'refused') else me['model'],
+        voiced = fin.get('text') or None
+        ans = {'id': rq['id'], 'final': voiced, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('agree', 'single', 'partial', 'refused') else me['model'],
                'path': fin.get('path'), 'kidsafe': fin.get('kidsafe'), 'withheld': fin.get('withheld', False), 'n_ok': len(good), 'n_slots': len(slots),
-               'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None), 'text': (v.get('text') or '')[:4000]} for k, v in parts.items()},
+               'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None)} for k, v in parts.items()},
                'judge_secs': round(time.time() - tj, 1), 'secs_runner': round(time.time() - t0, 1), 'run': RUN}
         dels = [path] + [f'heavy/part/{rq["id"]}/{k}.json' for k in parts]
         hf_put(api, {f'heavy/ans/{rq["id"]}.json': ans}, deletes=dels, msg='heavy ans')
         log('answered', round(time.time() - t0, 1), 's; members ok', len(good), 'of', len(slots))
+    def review(path, rq):
+        ks = kidsafe_check(me['model'], str(rq.get('question') or ''), str(rq.get('text') or ''))
+        hf_put(api, {f'heavy/ans/{rq["id"]}.json': {'id': rq['id'], 'kind': 'review', 'kidsafe': ks, 'run': RUN}}, deletes=[path], msg='heavy review')
+        log('reviewed', ks.get('verdict'), ks.get('chunks'), 'chunks')
     while time.time() - t_start < mx and time.time() - last_req < idle:
         try: files = [f.path for f in api.list_repo_tree(HF_REPO, path_in_repo='heavy/req', repo_type='dataset') if f.path.endswith('.json')]
         except Exception: files = []
@@ -393,6 +436,9 @@ def mode_agent(cfg_json, slot):
             last_req = time.time()
             if time.time() - float(rq.get('ts', 0)) > cfg.get('stale', 1800):      # too old: the box already answered with her small brain
                 if slot == jslot: hf_put(api, {}, deletes=[p], msg='heavy stale req')
+                continue
+            if rq.get('kind') == 'review':                                  # box asks the judge to kid-safe-review a 0.5B text: judge slot only
+                if slot == jslot: pool.submit(review, p, rq)
                 continue
             pool.submit(judge if slot == jslot else answer, p, rq)
         if time.time() - beat > 90: beat_now('ready'); beat = time.time()
