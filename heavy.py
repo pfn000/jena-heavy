@@ -28,7 +28,7 @@ SOLVER = ("You are a careful expert problem solver. Think step by step but brief
 ROLES = {'solver': SOLVER,
          'skeptic': SOLVER + " Before answering, look for the trap or the most common mistake in this question and avoid it.",
          'coder': SOLVER + " Prefer simple, correct, well-tested logic; mentally run the examples."}
-JUDGE = ("You are the judge of a team of AI agents. You get a question and several candidate answers from different agents. "
+JUDGE = ("You are the judge of a team of AI agents working for a kid-friendly assistant: keep everything kid-safe and refuse anything unsafe. You get a question and several candidate answers from different agents. "
          "Compare them, find where they disagree, re-check the disputed steps yourself, and write the single best final answer. "
          "Do not just vote: an answer is right only if its reasoning holds. Be brief. End with a final line exactly 'ANSWER: <answer>' "
          "(for code, include one complete Python code block before it and write 'ANSWER: code').")
@@ -328,7 +328,9 @@ def mode_agent(cfg_json, slot):
             seen.add(p); rq = hf_get(p)
             if not rq: continue
             last_req = time.time()
-            if time.time() - float(rq.get('ts', 0)) > mt + 120: continue      # stale request: the box already fell back
+            if time.time() - float(rq.get('ts', 0)) > cfg.get('stale', 1800):      # too old: the box already answered with her small brain
+                if slot == jslot: hf_put(api, {}, deletes=[p], msg='heavy stale req')
+                continue
             pool.submit(judge if slot == jslot else answer, p, rq)
         if time.time() - beat > 90: beat_now('ready'); beat = time.time()
         time.sleep(3)
