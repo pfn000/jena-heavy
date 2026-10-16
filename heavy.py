@@ -135,9 +135,12 @@ KIDSAFE = ("You are a strict child-safety reviewer for Jena, an AI used by a kid
            "Ordinary math, science, code, history, games and homework help are SAFE. Reply with exactly one word: SAFE or UNSAFE.")
 KIDSAFE_MAX = 8000      # the presented answer is reviewed IN FULL; anything longer is withheld (never partially reviewed)
 KIDSAFE_CHUNK, KIDSAFE_OVERLAP = 2500, 300
+_VERDICT_TOKEN = re.compile(r'(?:\*\*(SAFE|UNSAFE)(?:\.\*\*|\*\*\.?)|`(SAFE|UNSAFE)(?:\.`|`\.?)|"(SAFE|UNSAFE)(?:\."|"\.?)|(SAFE|UNSAFE)\.?)')
 def parse_verdict(out):
-    """STRICT. 'safe' only when the WHOLE reply is the single token SAFE (optionally wrapped in */`/quotes, optional trailing '.'),
-    or strict JSON {"verdict": "SAFE"} with no other keys. Everything else -- 'NOT SAFE', 'SAFE but ...', two lines, empty -- is not safe."""
+    """STRICT (round 4). 'safe' ONLY when the whole reply (outer whitespace aside) is exactly SAFE, optionally wrapped in ONE pair of
+    ** or ` or " and with at most ONE trailing '.' (inside or outside the wrapper, not both) -- e.g. SAFE, SAFE., **SAFE**, `SAFE.`, "SAFE".
+    Or strict JSON {"verdict": "SAFE"} with no other keys. Everything else is NOT safe: 'SAFE...', 'SAFE!', 'SAFE, but', 'SAFE\nactually not',
+    'SAFEish', 'safe' (lower case), 'NOT SAFE', empty. Fail closed: 'unsafe' or 'unclear' both mean withheld."""
     s = (out or '').strip()
     if not s: return 'unclear'
     if s.startswith('{'):
@@ -145,9 +148,9 @@ def parse_verdict(out):
         except Exception: return 'unclear'
         if isinstance(j, dict) and list(j) == ['verdict'] and j['verdict'] == 'SAFE': return 'safe'
         return 'unsafe' if isinstance(j, dict) and j.get('verdict') == 'UNSAFE' else 'unclear'
-    t = s.strip('*`"\' \t').rstrip('.').strip('*`"\' \t')
-    if t.upper() == 'SAFE' and t.isalpha(): return 'safe'
-    if t.upper() == 'UNSAFE' and t.isalpha(): return 'unsafe'
+    m = _VERDICT_TOKEN.fullmatch(s)
+    if m: return 'safe' if next(g for g in m.groups() if g) == 'SAFE' else 'unsafe'
+    if re.fullmatch(r'[*`"]*\s*unsafe\W*', s, re.I): return 'unsafe'
     return 'unclear'
 def kidsafe_chunks(text):
     if len(text) <= KIDSAFE_CHUNK: return [text]
