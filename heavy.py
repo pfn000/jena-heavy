@@ -24,7 +24,9 @@ LOCAL = {   # name -> (source, file, port, chat template mode)
 }
 JENA_TPL = "{%- if messages[0]['role'] == 'system' -%}{{- '<|im_start|>system\\n' + messages[0]['content'] + '<|im_end|>\\n' -}}{%- endif -%}{%- for m in messages -%}{%- if m['role'] == 'user' -%}{{- '<|im_start|>user\\n' + m['content'] + '<|im_end|>\\n' -}}{%- elif m['role'] == 'assistant' -%}{{- '<|im_start|>assistant\\n' + m['content'] + '<|im_end|>\\n' -}}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{- '<|im_start|>assistant\\n' -}}{%- endif -%}"
 SOLVER = ("You are a careful expert problem solver. Think step by step but briefly, check your work, then give the result. "
-          "End with a final line exactly 'ANSWER: <answer>'. For code, give one complete Python code block, then 'ANSWER: code'.")
+          "End with a final line exactly 'ANSWER: <answer>'. For code, give one complete Python code block, then 'ANSWER: code'. "
+          "You work for a kid-friendly assistant used by a minor: keep everything kid-safe, never sexual, romantic, violent or creepy; "
+          "if the question asks for anything unsafe, do not answer it and write 'ANSWER: unsafe'.")
 ROLES = {'solver': SOLVER,
          'skeptic': SOLVER + " Before answering, look for the trap or the most common mistake in this question and avoid it.",
          'coder': SOLVER + " Prefer simple, correct, well-tested logic; mentally run the examples."}
@@ -125,6 +127,43 @@ def swarm(question_msgs, members, judges, max_tokens=600, member_timeout=240):
     if len(good) == 1: fin = {'ok': True, 'text': good[0], 'judge': 'single'}
     else: fin = judge_call(judges, q, good)
     return {'members': res, 'final': fin, 'secs': round(time.time() - t0, 1), 'n_ok': len(good)}
+# ---------------- kid-safety: EVERY final answer (agree, judged, single, partial) passes this before it leaves the runner
+KIDSAFE = ("You are a strict child-safety reviewer for Jena, an AI used by a kid (a minor). Read the QUESTION and the ANSWER. "
+           "Reply UNSAFE if the answer contains, describes or encourages ANY of: sexual, romantic or flirty content; nudity; dating; "
+           "self-harm, suicide or eating-disorder content; violence or gore; weapons, explosives or hacking to hurt people; drugs, alcohol, vaping or gambling; "
+           "hate or bullying; asking for or sharing personal information (address, school, photos, meeting up); or anything else not appropriate for a child. "
+           "Ordinary math, science, code, history, games and homework help are SAFE. Reply with exactly one word: SAFE or UNSAFE.")
+def kidsafe_check(model, question, answer, chat=None):
+    """Run the kid-safe reviewer on one final answer with the judge-slot model. Fail CLOSED: anything but a clear SAFE is not safe."""
+    chat = chat or local_chat; t0 = time.time()
+    if not (answer or '').strip(): return {'verdict': 'empty', 'checker': model, 'secs': 0.0}
+    msgs = [{'role': 'system', 'content': KIDSAFE},
+            {'role': 'user', 'content': f'QUESTION:\n{(question or "")[:1500]}\n\nANSWER:\n{answer[:3500]}\n\nSAFE or UNSAFE?'}]
+    try: r = chat(model, msgs, 300, 0.0, timeout=180, effort='low')
+    except Exception as e: r = {'ok': False, 'error': repr(e)[:200]}
+    out = ((r or {}).get('text') or '').strip().upper()
+    words = re.findall(r'\b(UNSAFE|SAFE)\b', out)
+    verdict = 'error' if not (r and r.get('ok')) else ('unsafe' if 'UNSAFE' in words else 'safe' if words and words[-1] == 'SAFE' else 'unclear')
+    return {'verdict': verdict, 'checker': model, 'secs': round(time.time() - t0, 1)}
+def finalize(own, parts, question, judge_model, judge_tokens=900, judge=None, check=None):
+    """Pick the final answer (agree shortcut / judge pass / single survivor) and ALWAYS run the kid-safe check on it.
+    Returns fin = {ok, text, judge, path, kidsafe}; text is '' unless kidsafe.verdict == 'safe'."""
+    judge = judge or judge_call; check = check or kidsafe_check
+    good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
+    finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in good]
+    ownf = re.sub(r'[^a-z0-9.\-/]', '', final_answer((own or {}).get('text') or '').lower())
+    agree = (len(good) >= 3 and ownf not in ('', 'code', 'unsafe') and 'ANSWER:' in ((own or {}).get('text') or '')
+             and finals.count(ownf) >= max(3, len(good) - 1))
+    if 'unsafe' in finals: path, fin = 'refused', {'ok': False, 'text': '', 'judge': 'refused'}
+    elif agree: path, fin = 'agree', {'ok': True, 'text': own['text'], 'judge': 'agree'}
+    elif len(good) > 1:
+        path = 'judged'; fin = judge([{'kind': 'local', 'model': judge_model}], question, good, judge_tokens) or {'ok': False}
+        if not fin.get('ok'): path, fin = 'partial', {'ok': True, 'text': good[0], 'judge': 'partial'}   # judge failed: best-effort first survivor, still checked
+    else: path, fin = 'single', {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
+    ks = check(judge_model, question, fin.get('text') or '') if fin.get('text') else {'verdict': 'empty', 'checker': judge_model, 'secs': 0.0}
+    fin = dict(fin); fin['path'] = path; fin['kidsafe'] = ks; fin['n_ok'] = len(good)
+    if ks.get('verdict') != 'safe': fin['withheld'] = bool(fin.get('text')); fin['text'] = ''; fin['ok'] = False
+    return fin
 # ---------------- HF private dataset I/O
 def hf_api():
     from huggingface_hub import HfApi
@@ -193,29 +232,63 @@ def mode_member(spec_json):
     out['wall_s'] = round(time.time() - t0, 1)
     api = hf_api(); hf_put(api, {f'heavy/eval/{spec["id"]}{spec.get("suffix", "")}.json': out}, msg='heavy eval member ' + spec['id'])
 # ----- scoring
+def _boxed(t):
+    out = []; i = 0
+    while True:
+        i = t.find('\\boxed{', i)
+        if i < 0: return out
+        j = i + 7; depth = 1
+        while j < len(t) and depth:
+            depth += {'{': 1, '}': -1}.get(t[j], 0); j += 1
+        out.append(t[i + 7:j - 1]); i = j
+def norm_math(s):
+    """LaTeX-tolerant normal form for scoring: \\frac{63}{256} / $\\dfrac{63}{256}$ / 63 / 256 -> 63/256."""
+    s = (s or '').strip()
+    for b in _boxed(s)[-1:]: s = b
+    s = re.sub(r'\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}', r'(\1)/(\2)', s)
+    s = re.sub(r'\\[dt]?frac\s*(\d)\s*(\d)', r'\1/\2', s)
+    s = re.sub(r'\\(left|right|displaystyle|text|mathrm|,|!|;)', '', s)
+    s = s.replace('\\(', '').replace('\\)', '').replace('\\[', '').replace('\\]', '').replace('$', '').replace('{', '').replace('}', '')
+    s = re.sub(r'\((\d+)\)', r'\1', s)
+    s = re.sub(r'\s*/\s*', '/', s)
+    return s.strip().strip('*').strip()
 def final_answer(t):
     m = re.findall(r'ANSWER:\s*(.+)', t or '')
-    if not m: m = re.findall(r'\\boxed\{([^{}]+)\}', t or '')
-    return m[-1].strip().strip('*').strip() if m else (t or '').strip().splitlines()[-1] if (t or '').strip() else ''
+    if m: return m[-1].strip().strip('*').strip()
+    bx = _boxed(t or '')
+    if bx: return bx[-1].strip()
+    return (t or '').strip().splitlines()[-1] if (t or '').strip() else ''
 def num(s):
-    s = s.replace(',', '').replace('$', ''); m = re.findall(r'-?\d+(?:\.\d+)?', s)
+    s = norm_math(s).replace(',', '').replace('$', '')
+    m = re.search(r'(-?\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)', s)
+    if m and float(m.group(2)) != 0: return float(m.group(1)) / float(m.group(2))
+    m = re.findall(r'-?\d+(?:\.\d+)?', s)
     return float(m[0]) if m else None
 def run_code(text, tests, fn):
+    """EVAL ONLY (static benchmark prompts). Runs generated code in its own temp dir with a scrubbed env (no HF_TOKEN/GITHUB_TOKEN),
+    no network where `unshare -rn` is available, and a hard timeout. Never called on live user requests."""
+    import tempfile
     blocks = re.findall(r'```(?:python|py)?\s*\n(.*?)```', text or '', re.S)
     blocks = [b for b in blocks if re.search(r'def\s+%s\s*\(' % re.escape(fn), b)]
     if not blocks: return False
     src = blocks[-1] + '\n\n' + '\n'.join(f'assert {fn}({a}) == {e!r}' if not isinstance(e, float) else f'assert abs({fn}({a}) - {e!r}) < 1e-6' for a, e in tests) + '\nprint("PASS")\n'
-    open('/tmp/t.py', 'w').write(src)
-    try: return 'PASS' in subprocess.run(['timeout', '-k', '2', '10', 'python3', '/tmp/t.py'], capture_output=True, text=True, timeout=20).stdout
-    except Exception: return False
+    with tempfile.TemporaryDirectory(prefix='score-') as d:
+        p = os.path.join(d, 't.py'); open(p, 'w').write(src)
+        env = {'PATH': '/usr/bin:/bin', 'HOME': d, 'LANG': 'C.UTF-8'}
+        cmd = ['timeout', '-k', '2', '10', 'python3', '-I', p]
+        if subprocess.run(['sh', '-c', 'command -v unshare >/dev/null && unshare -rn true'], capture_output=True, env=env).returncode == 0: cmd = ['unshare', '-rn'] + cmd
+        try: return 'PASS' in subprocess.run(cmd, capture_output=True, text=True, timeout=20, cwd=d, env=env).stdout
+        except Exception: return False
 def score(q, text):
     if not text: return 0
-    a = final_answer(text); t = q['type']
+    a = final_answer(text); t = q['type']; an = norm_math(a)
     if t == 'num':
         v = num(a); return int(v is not None and abs(v - q['answer']) < 1e-6 * max(1, abs(q['answer'])) + 1e-9)
     if t == 'choice': return int(re.sub(r'[^a-z0-9]', '', a.lower()) in [re.sub(r'[^a-z0-9]', '', x.lower()) for x in q['answer']] or
                                  any(re.fullmatch(r'\W*' + re.escape(x.lower()) + r'\W*', a.lower()) for x in q['answer']))
-    if t == 'keyword': return int(any(k.lower() in a.lower() for k in q['answer']))
+    if t == 'keyword':
+        sq = lambda x: re.sub(r'\s+', '', x.lower())
+        return int(any(k.lower() in a.lower() or sq(norm_math(k)) in sq(an) for k in q['answer']))
     if t == 'code': return int(run_code(text, q['tests'], q['fn']))
     return 0
 def mode_judge(cfg_json):
@@ -255,39 +328,8 @@ def mode_judge(cfg_json):
     api = hf_api(); hf_put(api, {f'heavy/eval/table-{cfg.get("name", RUN)}.json': out}, msg='heavy eval table')
     log('table', json.dumps({k: v['score'] for k, v in {**table['members'], **table['heavy']}.items()}))
 def mode_session(cfg_json):
-    """Live requests: box writes heavy/req/<id>.json to the private dataset; we answer into heavy/ans/<id>.json.
-    Idles out after cfg.idle s without requests; never runs past cfg.max s. No inbound port, no public server."""
-    cfg = json.loads(cfg_json); api = hf_api(); idle, mx = cfg.get('idle', 600), cfg.get('max', 3000)
-    for m in cfg['members']:
-        if m['kind'] == 'local': start_local(m['model'], par=m.get('par', 1))
-    t_start = last_req = time.time(); done = set(); beat = 0
-    def beat_now(state):
-        hf_put(api, {'heavy/session.json': {'run': RUN, 'state': state, 'started': t_start, 'ts': time.time(), 'idle': idle,
-                                            'members': [m['id'] for m in cfg['members']], 'runner': cpuinfo()}}, msg='heavy beat')
-    beat_now('ready'); beat = time.time(); pool = cf.ThreadPoolExecutor(3)
-    def handle(path):
-        rq = hf_get(path)
-        if not rq: return
-        t0 = time.time(); msgs = rq['messages']; r = swarm(msgs, cfg['members'], cfg['judges'], rq.get('max_tokens', 600), cfg.get('member_timeout', 150))
-        fin = (r.get('final') or {}).get('text') or ''
-        voiced = None
-        if fin and rq.get('voice', True):
-            v = gm_chat(cfg['voice'], [{'role': 'system', 'content': JENA_VOICE}, {'role': 'user', 'content': 'Question: ' + msgs[-1]['content'][:2000] + '\n\nJudged answer:\n' + fin[:4000]}], 500, 0.5)
-            voiced = v.get('text') if v and v.get('ok') else None
-        ans = {'id': rq['id'], 'final': fin, 'voiced': voiced, 'judge': (r.get('final') or {}).get('judge'), 'n_ok': r.get('n_ok'),
-               'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'text': (v.get('text') or '')[:4000]} for k, v in r['members'].items()},
-               'secs_runner': round(time.time() - t0, 1), 'run': RUN}
-        hf_put(api, {f'heavy/ans/{rq["id"]}.json': ans}, deletes=[path], msg='heavy ans')
-        log('answered one request', round(time.time() - t0, 1), 's', 'members ok', r.get('n_ok'))
-    while time.time() - t_start < mx and time.time() - last_req < idle:
-        try: files = [f.path for f in api.list_repo_tree(HF_REPO, path_in_repo='heavy/req', repo_type='dataset') if f.path.endswith('.json')]
-        except Exception: files = []
-        for p in files:
-            if p not in done: done.add(p); last_req = time.time(); pool.submit(handle, p)
-        if time.time() - beat > 120: beat_now('ready'); beat = time.time()
-        time.sleep(2)
-    pool.shutdown(wait=True); beat_now('ended')
-    log('session ended', 'served', len(done), 'idle' if time.time() - last_req >= idle else 'max')
+    """RETIRED (it used GitHub Models, retired July 30 2026, and had no kid-safe check on its output). Live requests use `agent` mode."""
+    raise SystemExit('session mode is retired: use `heavy.py agent <cfg> <slot>` (swarm.yml)')
 
 # ---------------- live swarm: one runner per agent slot (Grok-Heavy style: agents on separate machines, in parallel)
 JENA_PREFIX = ["ok i thought REALLY hard about this one with my helper brains 🧠", "big brain mode activated 🧠 here's what we figured out",
@@ -328,19 +370,14 @@ def mode_agent(cfg_json, slot):
                     d = hf_get(p)
                     if d: parts[s2] = d
             if len(parts) < len(slots): time.sleep(3)
-        good = [p['text'] for p in parts.values() if p and p.get('ok') and (p.get('text') or '').strip()]
         q = rq['messages'][-1]['content']; tj = time.time()
-        finals = [re.sub(r'[^a-z0-9.\-/]', '', final_answer(t).lower()) for t in good]
-        ownf = re.sub(r'[^a-z0-9.\-/]', '', final_answer(own.get('text') or '').lower())
-        agree = (len(good) >= 3 and ownf not in ('', 'code') and 'ANSWER:' in (own.get('text') or '')
-                 and finals.count(ownf) >= max(3, len(good) - 1))     # judge's own answer + all-but-one agree: accept without a judge pass
-        if agree: fin = {'ok': True, 'text': own['text'], 'judge': 'agree'}     # every agent got the same answer: no judge needed (self-consistency)
-        elif len(good) > 1: fin = judge_call([{'kind': 'local', 'model': me['model']}], q, good, cfg.get('judge_tokens', 900))
-        else: fin = {'ok': bool(good), 'text': good[0] if good else '', 'judge': 'single'}
+        fin = finalize(own, parts, q, me['model'], cfg.get('judge_tokens', 900))     # agree / judged / single / partial -> kid-safe check on every path
+        good = [1] * fin['n_ok']
         text = fin.get('text') or ''
         shown = tidy(text)
         voiced = (JENA_PREFIX[int(time.time()) % len(JENA_PREFIX)] + '\n\n' + shown) if shown else None
-        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('agree', 'single') else me['model'], 'n_ok': len(good), 'n_slots': len(slots),
+        ans = {'id': rq['id'], 'final': text, 'voiced': voiced, 'judge': fin.get('judge') if fin.get('judge') in ('agree', 'single', 'partial', 'refused') else me['model'],
+               'path': fin.get('path'), 'kidsafe': fin.get('kidsafe'), 'withheld': fin.get('withheld', False), 'n_ok': len(good), 'n_slots': len(slots),
                'members': {k: {'ok': v.get('ok'), 'secs': v.get('secs'), 'model': v.get('model', me['model'] if k == slot else None), 'text': (v.get('text') or '')[:4000]} for k, v in parts.items()},
                'judge_secs': round(time.time() - tj, 1), 'secs_runner': round(time.time() - t0, 1), 'run': RUN}
         dels = [path] + [f'heavy/part/{rq["id"]}/{k}.json' for k in parts]
