@@ -18,6 +18,8 @@ LOCAL = {   # name -> (source, file, port, chat template mode)
   'jena15': ('hf-private', 'models/JenaXI-chat-1.5B.gguf', 8102, 'jena'),
   'qwen7b': ('https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf', 'qwen7b.gguf', 8103, 'auto'),
   'qwen14b': ('https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf', 'qwen14b.gguf', 8104, 'auto'),
+  'gptoss20b': ('https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf', 'gptoss20b.gguf', 8106, 'oss'),
+  'qwen30a3b': ('https://huggingface.co/bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen_Qwen3-30B-A3B-Instruct-2507-IQ3_XXS.gguf', 'qwen30a3b.gguf', 8107, 'auto'),
   'qwen3-4b': ('https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf', 'qwen3-4b.gguf', 8105, 'auto'),
 }
 JENA_TPL = "{%- if messages[0]['role'] == 'system' -%}{{- '<|im_start|>system\\n' + messages[0]['content'] + '<|im_end|>\\n' -}}{%- endif -%}{%- for m in messages -%}{%- if m['role'] == 'user' -%}{{- '<|im_start|>user\\n' + m['content'] + '<|im_end|>\\n' -}}{%- elif m['role'] == 'assistant' -%}{{- '<|im_start|>assistant\\n' + m['content'] + '<|im_end|>\\n' -}}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{- '<|im_start|>assistant\\n' -}}{%- endif -%}"
@@ -78,6 +80,7 @@ def start_local(name, threads=None, ctx=4096, par=1):
     args = [BIN, '-m', path, '--host', '127.0.0.1', '--port', str(port), '-c', str(ctx * par), '-np', str(par), '-t', str(threads or NPROC), '--jinja', '--no-webui']
     if tpl == 'jena':
         open('jena.jinja', 'w').write(JENA_TPL); args += ['--chat-template-file', 'jena.jinja', '--repeat-penalty', '1.1']
+    if tpl == 'oss': args += ['--chat-template-kwargs', json.dumps({'reasoning_effort': os.environ.get('OSS_EFFORT', 'low')})]
     t0 = time.time(); lf = open(f'{OUT}/llama-{name}.log', 'w')
     p = subprocess.Popen(args, stdout=lf, stderr=subprocess.STDOUT); PROCS[name] = p
     while time.time() - t0 < 300:
@@ -91,7 +94,7 @@ def local_chat(name, messages, max_tokens=600, temperature=0.3, timeout=600):
     st, b, _ = http(f'http://127.0.0.1:{port}/v1/chat/completions', {'messages': messages, 'max_tokens': max_tokens, 'temperature': temperature, 'cache_prompt': True}, timeout=timeout)
     if st != 200: return {'ok': False, 'status': st, 'error': b[:300], 'secs': round(time.time() - t0, 1)}
     j = json.loads(b); tm = j.get('timings') or {}
-    return {'ok': True, 'text': j['choices'][0]['message'].get('content') or '', 'secs': round(time.time() - t0, 1),
+    return {'ok': True, 'text': j['choices'][0]['message'].get('content') or '', 'reasoning_chars': len(j['choices'][0]['message'].get('reasoning_content') or ''), 'secs': round(time.time() - t0, 1),
             'gen_tps': round(tm.get('predicted_per_second') or 0, 2), 'pp_tps': round(tm.get('prompt_per_second') or 0, 1),
             'gen_tokens': tm.get('predicted_n'), 'usage': j.get('usage')}
 def member_call(spec, messages, max_tokens=600):
@@ -164,6 +167,8 @@ def mode_probe(locals_csv):
             info = start_local(name)
             prompt = [{'role': 'user', 'content': 'Explain in about 150 words how a rainbow forms.'}]
             r1 = local_chat(name, prompt, 200, 0.3); r2 = local_chat(name, prompt, 200, 0.3)
+            longp = [{'role': 'user', 'content': ('Here is some text to read carefully. ' + open('heavy.py').read()[:5000]) + '\nIn one sentence, what does this program do?'}]
+            r3 = local_chat(name, longp, 60, 0.3); info['pp_tps_long'] = r3.get('pp_tps'); info['long_prompt_tokens'] = (r3.get('usage') or {}).get('prompt_tokens')
             info.update({'gen_tps': r2.get('gen_tps'), 'pp_tps': r1.get('pp_tps'), 'first_call_s': r1.get('secs'), 'second_call_s': r2.get('secs'), 'gen_tokens': r2.get('gen_tokens')})
             info['rss_mb'] = int(open(f'/proc/{PROCS[name].pid}/status').read().split('VmRSS:')[1].split()[0]) // 1024
             PROCS[name].terminate(); PROCS[name].wait(20)
